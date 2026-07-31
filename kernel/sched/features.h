@@ -66,9 +66,6 @@
 #define SCHED_FEAT_WAKEUP_PREEMPTION 1
 
 #define SCHED_FEAT_HRTICK 0
-SCHED_FEAT(HRTICK, false)
-SCHED_FEAT(DOUBLE_TICK, false)
-SCHED_FEAT(LB_BIAS, false)
 
 /*
  * Decrement CPU capacity based on time not spent running tasks
@@ -110,13 +107,6 @@ SCHED_FEAT(LB_BIAS, false)
 #define SCHED_FEAT_WA_IDLE 1
 #define SCHED_FEAT_WA_WEIGHT 1
 #define SCHED_FEAT_WA_BIAS 1
-/*
- * Minimum capacity capping. Keep track of minimum capacity factor when
- * minimum frequency available to a policy is modified.
- * If enabled, this can be used to inform the scheduler about capacity
- * restrictions.
- */
-SCHED_FEAT(MIN_CAPACITY_CAPPING, true)
 
 /*
  * UtilEstimation. Use estimated CPU utilization.
