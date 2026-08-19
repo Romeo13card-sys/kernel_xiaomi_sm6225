@@ -255,7 +255,7 @@ static void rmnet_dellink(struct net_device *dev, struct list_head *head)
 	ep = rmnet_get_endpoint(port, mux_id);
 	if (ep) {
 		hlist_del_init_rcu(&ep->hlnode);
-		real_port->nr_rmnet_devs--;
+		port->nr_rmnet_devs--;
 		kfree_rcu(ep, rcu);
 	}
 
@@ -284,7 +284,7 @@ static void rmnet_force_unassociate_device(struct net_device *dev)
 
 	if (port->nr_rmnet_devs) {
 		/* real device */
-		rmnet_unregister_bridge(port);
+		rmnet_unregister_bridge(real_dev, port);
 		hash_for_each_safe(port->muxed_ep, bkt_ep, tmp_ep, ep, hlnode) {
 			unregister_netdevice_queue(ep->egress_dev, &list);
 			netdev_upper_dev_unlink(real_dev, ep->egress_dev);
@@ -292,10 +292,10 @@ static void rmnet_force_unassociate_device(struct net_device *dev)
 			port->nr_rmnet_devs--;
 			kfree_rcu(ep, rcu);
 		}
-		rmnet_unregister_real_device(real_dev);
+		rmnet_unregister_real_device(real_dev, port);
 		unregister_netdevice_many(&list);
 	} else {
-		rmnet_unregister_bridge(port);
+		rmnet_unregister_bridge(real_dev, port);
 	}
 
 	synchronize_rcu();
