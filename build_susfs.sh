@@ -28,6 +28,6 @@ wget https://github.com/xxblebleblexx/android_kernel_xiaomi_sm6225/commit/82a531
 
 
 #Nomount driver
-curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/nomount-installer/refs/heads/dev-installer/nomount.sh" | bash -s 4.19
+curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/nomount-installer/refs/heads/installer/nomount.sh" | bash -s 4.19
 
 make O=out ARCH=arm64 $defconfig; printf "n\n2\n\n\n\nY\n" | make -j$(nproc --all) CC=clang O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip
