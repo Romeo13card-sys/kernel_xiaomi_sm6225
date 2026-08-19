@@ -1309,6 +1309,19 @@ static void hidg_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_free_all_descriptors(f);
 }
 
+static struct hidg_func_descriptor hid_data = {
+	.subclass = 0,      /* No subclass */
+	.protocol = 0,      /* Mouse Protocol */
+	.report_length = 4,
+	.report_desc_length = 7,
+	.report_desc = {
+		0x05, 0x01, /* USAGE_PAGE (Generic Desktop)     */
+		0x09, 0x00, /* USAGE (None)             */
+		0xa1, 0x01, /* COLLECTION (Application)     */
+		0xc0        /* END_COLLECTION           */
+	}
+};
+
 static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 {
 	struct f_hidg *hidg;
