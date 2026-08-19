@@ -414,6 +414,11 @@ static inline void set_cold_node(struct page *page, bool is_dir)
 	rn->footer.flag = cpu_to_le32(flag);
 }
 
+static inline void clear_cold_data(struct page *page)
+{
+	ClearPageChecked(page);
+}
+
 static inline void set_mark(struct page *page, int mark, int type)
 {
 	struct f2fs_node *rn = F2FS_NODE(page);
