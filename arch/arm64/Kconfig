@@ -479,7 +479,7 @@ config ARM64_ERRATUM_834220
 config ARM64_ERRATUM_845719
 	bool "Cortex-A53: 845719: a load might read incorrect data"
 	depends on COMPAT
-	default y
+	default n
 	help
 	  This option adds an alternative code sequence to work around ARM
 	  erratum 845719 on Cortex-A53 parts up to r0p4.
@@ -525,7 +525,7 @@ config ARM64_ERRATUM_1024718
 
 config ARM64_ERRATUM_1188873
 	bool "Cortex-A76: MRC read following MRRC read of specific Generic Timer in AArch32 might give incorrect result"
-	default y
+	default n
 	help
 	  This option adds work arounds for ARM Cortex-A76 erratum 1188873
 
@@ -535,6 +535,11 @@ config ARM64_ERRATUM_1188873
 
 	  If unsure, say Y.
 
+config ARM64_ERRATUM_858921
+	bool "Cortex-A76: Software Step might prevent interrupt recognition"
+	default n
+	help
+	
 config ARM64_ERRATUM_1463225
 	bool "Cortex-A76: Software Step might prevent interrupt recognition"
 	default y
