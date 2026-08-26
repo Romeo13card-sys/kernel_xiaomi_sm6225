@@ -140,8 +140,6 @@ jobs:
 
           mkdir -p logs
 
-          trap 'RC=$?; echo "::error::CONFIGURE FAILED | exit=$RC | line=$LINENO | command=$BASH_COMMAND"; echo "CONFIGURE_EXIT_CODE=$RC" > logs/configure_error.txt; echo "CONFIGURE_LINE=$LINENO" >> logs/configure_error.txt; echo "CONFIGURE_COMMAND=$BASH_COMMAND" >> logs/configure_error.txt; exit $RC' ERR
-
           echo "========================================"
           echo "CONFIGURE vendor/fog_defconfig"
           echo "========================================"
@@ -151,14 +149,12 @@ jobs:
             exit 20
           fi
 
-          echo "Defconfig:"
-          ls -lh arch/arm64/configs/vendor/fog_defconfig
-          echo
-
-          (
-            set -x
-            make O=out ARCH=arm64 vendor/fog_defconfig
-          ) 2>&1 | tee logs/configure.log
+          # Выполнение конфигурирования без tee для предотвращения Broken Pipe
+          if ! make O=out ARCH=arm64 vendor/fog_defconfig > logs/configure.log 2>&1; then
+            echo "::error::MAKE DEFCONFIG FAILED! Лог ошибки:"
+            tail -n 100 logs/configure.log || true
+            exit 21
+          fi
 
           if [ ! -f "out/.config" ]; then
             echo "::error::make terminou mas out/.config não existe."
@@ -176,21 +172,27 @@ jobs:
           export PATH="$(pwd)/clang/bin:$PATH"
           mkdir -p logs
 
-          trap 'RC=$?; echo "::error::BUILD FAILED | exit=$RC | line=$LINENO | command=$BASH_COMMAND"; echo "BUILD_EXIT_CODE=$RC" > logs/build_error.txt; echo "BUILD_LINE=$LINENO" >> logs/build_error.txt; echo "BUILD_COMMAND=$BASH_COMMAND" >> logs/build_error.txt; echo; echo "===== LAST 120 BUILD LOG LINES ====="; tail -n 120 logs/build.log 2>/dev/null || true; exit $RC' ERR
-
           echo "========================================"
           echo "BUILD KERNEL"
           echo "========================================"
 
-          # Применяем стандартные опции по умолчанию без использования printf
-          make O=out ARCH=arm64 olddefconfig
+          echo "CPU jobs: $(nproc --all)"
+          echo "PWD: $(pwd)"
+          echo
 
-          echo "Starting compilation with 4 jobs..."
+          # Автопринятие дефолтных опций
+          make O=out ARCH=arm64 olddefconfig > /dev/null 2>&1 || true
 
-          (
-            set -x
-            make -j4 CC=clang O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip
-          ) 2>&1 | tee logs/build.log
+          echo "Starting compilation..."
+
+          # Компиляция с прямой переадресацией вывода в лог без pipe/tee
+          if ! make -j$(nproc --all) CC=clang O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- > logs/build.log 2>&1; then
+            echo "::error::BUILD FAILED! Последние 120 строк лога компиляции:"
+            echo "========================================"
+            tail -n 120 logs/build.log || true
+            echo "========================================"
+            exit 22
+          fi
 
           KERNEL_IMAGE="out/arch/arm64/boot/Image.gz"
 
@@ -199,6 +201,10 @@ jobs:
 
           if [ ! -f "$KERNEL_IMAGE" ]; then
             echo "::error::A build terminou, mas Image.gz não foi encontrado."
+            echo "Esperado: $KERNEL_IMAGE"
+            echo
+            echo "Arquivos em out/arch/arm64/boot:"
+            find out/arch/arm64/boot -maxdepth 3 -type f -printf '%p %s bytes\n' 2>/dev/null | sort || true
             exit 22
           fi
 
@@ -213,6 +219,7 @@ jobs:
           set -Eeuo pipefail
 
           git clone --depth=1 https://github.com/Romeo13card/AnyKernel3.git ~/AnyKernel3
+          
           cp out/arch/arm64/boot/Image.gz ~/AnyKernel3/Image.gz
 
           if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
@@ -278,6 +285,11 @@ jobs:
             echo "========================================"
             ls -lh arch/arm64/configs/vendor/fog_defconfig 2>&1 || true
             ls -lh out/.config 2>&1 || true
+            echo
+            echo "========================================"
+            echo "LAST 220 BUILD LOG LINES"
+            echo "========================================"
+            tail -n 220 logs/build.log 2>/dev/null || echo "No build.log"
             echo
             echo "========================================"
             echo "BOOT OUTPUT FILES"
