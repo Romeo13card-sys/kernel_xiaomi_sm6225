@@ -311,4 +311,4 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 telegram_build.py
+          python3 telegram_api.py
