@@ -1,4 +1,4 @@
-name: KadzuhaCl
+name: CI Kernel Compilation
 
 on:
   workflow_dispatch:
@@ -15,6 +15,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+
       - name: Fetch repository sources
         uses: actions/checkout@v4
         with:
@@ -70,8 +77,11 @@ jobs:
           export ARCH=arm64
           export O=out
           
+          # Ограничение потоков для предотвращения LLVM Broken Pipe (OOM)
+          JOBS=$(nproc)
+          
           MAKE_ARGS=(
-            -j$(nproc --all)
+            -j${JOBS}
             CC=clang
             LLVM=1
             LLVM_IAS=1
