@@ -1,4 +1,4 @@
-name: Build + Telegram
+name: CI Kernel Compilation
 
 on:
   workflow_dispatch:
@@ -6,322 +6,172 @@ on:
     branches:
       - "dev/cip"
 
-permissions:
-  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  kernel-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout kernel source
+      - name: Fetch repository sources
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Debug runner environment
-        shell: bash
+      - name: Provision build system & Toolchain
         run: |
-          set -u
+          set -euo pipefail
+          
+          # Установка базового окружения
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            bc bison flex gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libelf-dev libssl-dev make python3 zip unzip git curl patch zstd
 
-          echo "========================================"
-          echo "RUNNER DEBUG"
-          echo "========================================"
-          echo "PWD: $(pwd)"
-          echo "Branch: ${GITHUB_REF_NAME:-unknown}"
-          echo "Commit: ${GITHUB_SHA:-unknown}"
-          echo "Runner OS: ${RUNNER_OS:-unknown}"
-          echo "Runner arch: ${RUNNER_ARCH:-unknown}"
-          echo
+          # Загрузка компилятора Sakura Clang
+          mkdir -p toolchain
+          curl -sSL "https://github.com/Madara273/Sakura-Clang-Compiler/releases/download/Sakura-Clang-R01/sakura-clang-24.0.0.tar.zst" | tar -I zstd -x -C toolchain/
+          
+          echo "$GITHUB_WORKSPACE/toolchain/bin" >> $GITHUB_PATH
 
-          echo "===== uname ====="
-          uname -a || true
-
-          echo
-          echo "===== CPU ====="
-          nproc --all || true
-          lscpu | sed -n '1,25p' || true
-
-          echo
-          echo "===== MEMORY ====="
-          free -h || true
-
-          echo
-          echo "===== DISK ====="
-          df -h . || true
-
-          echo
-          echo "===== GIT ====="
-          git status --short || true
-          git log -1 --oneline || true
-
-          echo
-          echo "===== REQUIRED FILES ====="
-          ls -l Makefile || true
-          ls -l arch/arm64/configs/vendor/fog_defconfig || true
-
-      - name: Install dependencies & Sakura Clang
-        id: dependencies
-        shell: bash
+      - name: Apply KSU & Kernel Modifications
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
+          
+          TARGET_CONFIG="arch/arm64/configs/vendor/fog_defconfig"
 
-          trap 'RC=$?; echo "::error::DEPENDENCIES FAILED | exit=$RC | line=$LINENO | command=$BASH_COMMAND"; exit $RC' ERR
+          # Подготовка ReSukiSU
+          curl -sSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
-          PACKAGES=(
-            bc
-            bison
-            flex
-            gcc-aarch64-linux-gnu
-            gcc-arm-linux-gnueabi
-            libelf-dev
-            libssl-dev
-            make
-            python3
-            zip
-            unzip
-            git
-            curl
-            patch
-            zstd
+          # Включение конфигураций
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_MANUAL_HOOK=y"
+          } >> "$TARGET_CONFIG"
+
+          # Наложение патча Manual Hook
+          curl -sSL "https://raw.githubusercontent.com/xxblebleblexx/manual_hook_fix/refs/heads/main/resuki-4.19-cip-st.patch" -o patch.patch
+          patch -p1 < patch.patch
+
+          # Установка nomount
+          curl -sSL "https://raw.githubusercontent.com/xxblebleblexx/nomount-installer/refs/heads/installer/nomount.sh" | bash -s 4.19
+
+      - name: Execute Kernel Build
+        run: |
+          set -euo pipefail
+          
+          mkdir -p build_logs
+          
+          export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
+          export ARCH=arm64
+          export O=out
+          
+          MAKE_ARGS=(
+            -j$(nproc --all)
+            CC=clang
+            LLVM=1
+            LLVM_IAS=1
+            LD=ld.lld
+            AS=llvm-as
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            READELF=llvm-readelf
+            STRIP=llvm-strip
+            CROSS_COMPILE=aarch64-linux-gnu-
           )
 
-          echo "Packages to install: ${PACKAGES[*]}"
+          echo "TIMESTAMP_START=$(date +%s)" >> $GITHUB_ENV
 
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+          # Генерация конфигурации
+          make "${MAKE_ARGS[@]}" vendor/fog_defconfig > build_logs/config.log 2>&1
+          make "${MAKE_ARGS[@]}" olddefconfig > /dev/null 2>&1 || true
 
-          echo "===== DOWNLOADING SAKURA CLANG ====="
-          mkdir -p clang
-          curl -L "https://github.com/Madara273/Sakura-Clang-Compiler/releases/download/Sakura-Clang-R01/sakura-clang-24.0.0.tar.zst" | tar -I zstd -x -C clang/
-          echo "$(pwd)/clang/bin" >> $GITHUB_PATH
-
-          echo
-          echo "===== TOOLCHAIN VERSIONS ====="
-          "$(pwd)/clang/bin/clang" --version | head -n 3
-          python3 --version
-
-      - name: Start build timer
-        shell: bash
-        run: |
-          echo "BUILD_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Setup ReSukiSU & Patch Kernel
-        id: patch
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          DEFCONFIG_PATH="arch/arm64/configs/vendor/fog_defconfig"
-
-          echo "========================================"
-          echo "APPLYING RESUKISU & MANUAL HOOK PATCH"
-          echo "========================================"
-
-          # 1. Загрузка ReSukiSU
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-
-          # 2. Активация KSU в defconfig
-          echo "CONFIG_KSU=y" >> "$DEFCONFIG_PATH"
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$DEFCONFIG_PATH"
-
-          # 3. Применение патча Manual Hook Fix
-          wget https://raw.githubusercontent.com/xxblebleblexx/manual_hook_fix/refs/heads/main/resuki-4.19-cip-st.patch
-          patch -p1 < resuki-4.19-cip-st.patch
-
-          # 4. Установка nomount драйвера
-          curl -LSs "https://raw.githubusercontent.com/xxblebleblexx/nomount-installer/refs/heads/installer/nomount.sh" | bash -s 4.19
-
-      - name: Configure vendor/fog_defconfig
-        id: configure
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          mkdir -p logs
-
-          echo "========================================"
-          echo "CONFIGURE vendor/fog_defconfig"
-          echo "========================================"
-
-          if [ ! -f "arch/arm64/configs/vendor/fog_defconfig" ]; then
-            echo "::error file=arch/arm64/configs/vendor/fog_defconfig::fog_defconfig não existe."
-            exit 20
+          # Запуск сборки
+          if ! make "${MAKE_ARGS[@]}" > build_logs/compilation.log 2>&1; then
+            echo "::error::Compilation failed! Check logs."
+            tail -n 120 build_logs/compilation.log || true
+            exit 1
           fi
 
-          # Выполнение конфигурирования без tee для предотвращения Broken Pipe
-          if ! make O=out ARCH=arm64 vendor/fog_defconfig > logs/configure.log 2>&1; then
-            echo "::error::MAKE DEFCONFIG FAILED! Лог ошибки:"
-            tail -n 100 logs/configure.log || true
-            exit 21
+          # Проверка результата
+          IMAGE_PATH="out/arch/arm64/boot/Image.gz"
+          if [[ ! -f "$IMAGE_PATH" ]]; then
+            echo "::error::Target output file not found: $IMAGE_PATH"
+            exit 1
           fi
 
-          if [ ! -f "out/.config" ]; then
-            echo "::error::make terminou mas out/.config não existe."
-            exit 21
-          fi
+          echo "IMAGE_OUTPUT=$IMAGE_PATH" >> $GITHUB_ENV
 
-          echo "Defconfig concluído com sucesso."
-
-      - name: Build kernel
-        id: build
-        shell: bash
+      - name: Package AnyKernel3 Zip
         run: |
-          set -Eeuo pipefail
-
-          export PATH="$(pwd)/clang/bin:$PATH"
-          mkdir -p logs
-
-          echo "========================================"
-          echo "BUILD KERNEL"
-          echo "========================================"
-
-          echo "CPU jobs: $(nproc --all)"
-          echo "PWD: $(pwd)"
-          echo
-
-          # Автопринятие дефолтных опций
-          make O=out ARCH=arm64 olddefconfig > /dev/null 2>&1 || true
-
-          echo "Starting compilation..."
-
-          # Компиляция с прямой переадресацией вывода в лог без pipe/tee
-          if ! make -j$(nproc --all) CC=clang O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- > logs/build.log 2>&1; then
-            echo "::error::BUILD FAILED! Последние 120 строк лога компиляции:"
-            echo "========================================"
-            tail -n 120 logs/build.log || true
-            echo "========================================"
-            exit 22
-          fi
-
-          KERNEL_IMAGE="out/arch/arm64/boot/Image.gz"
-
-          echo
-          echo "===== CHECK IMAGE ====="
-
-          if [ ! -f "$KERNEL_IMAGE" ]; then
-            echo "::error::A build terminou, mas Image.gz não foi encontrado."
-            echo "Esperado: $KERNEL_IMAGE"
-            echo
-            echo "Arquivos em out/arch/arm64/boot:"
-            find out/arch/arm64/boot -maxdepth 3 -type f -printf '%p %s bytes\n' 2>/dev/null | sort || true
-            exit 22
-          fi
-
-          ls -lh "$KERNEL_IMAGE"
-          sha1sum "$KERNEL_IMAGE"
-
-          echo "BUILD_FILE=$KERNEL_IMAGE" >> "$GITHUB_ENV"
-
-      - name: Prepare AnyKernel3
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          git clone --depth=1 https://github.com/Romeo13card/AnyKernel3.git ~/AnyKernel3
+          set -euo pipefail
           
-          cp out/arch/arm64/boot/Image.gz ~/AnyKernel3/Image.gz
+          git clone --depth=1 https://github.com/Romeo13card/AnyKernel3.git ak3_workspace
+          cp "$IMAGE_OUTPUT" ak3_workspace/Image.gz
 
-          if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
-            cp out/arch/arm64/boot/dtbo.img ~/AnyKernel3/dtbo.img
+          if [[ -f "out/arch/arm64/boot/dtbo.img" ]]; then
+            cp out/arch/arm64/boot/dtbo.img ak3_workspace/dtbo.img
           fi
 
-          ZIP_NAME="fog-Kadzuha-KSU-withoutSUSFS$(date +%Y%m%d-%H%M).zip"
+          PACKAGE_NAME="fog-Kadzuha-KSU-withoutSUSFS-$(date +%Y%m%d-%H%M).zip"
+          ZIP_TARGET_PATH="/tmp/$PACKAGE_NAME"
 
-          cd ~/AnyKernel3
-          zip -r9 "/tmp/$ZIP_NAME" * -x .git README.md .gitignore
+          cd ak3_workspace
+          zip -r9 "$ZIP_TARGET_PATH" . -x ".git*" "README.md"
 
-          echo "ANYKERNEL_ZIP=/tmp/$ZIP_NAME" >> "$GITHUB_ENV"
-          ls -lh "/tmp/$ZIP_NAME"
-          sha1sum "/tmp/$ZIP_NAME"
+          echo "AK3_ZIP_PATH=$ZIP_TARGET_PATH" >> $GITHUB_ENV
 
-      - name: Collect detailed debug report
+      - name: Generate Diagnostic Summary
         if: always()
-        id: debug_report
-        shell: bash
-        env:
-          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
-          CONFIGURE_OUTCOME: ${{ steps.configure.outcome }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
         run: |
           set +e
-
-          REPORT="$GITHUB_WORKSPACE/debug_report.txt"
+          SUMMARY_FILE="$GITHUB_WORKSPACE/debug_report.txt"
 
           {
-            echo "========================================"
-            echo "KERNEL BUILD DEBUG REPORT"
-            echo "========================================"
-            echo "Repository: ${GITHUB_REPOSITORY:-unknown}"
-            echo "Branch: ${GITHUB_REF_NAME:-unknown}"
-            echo "Commit: ${GITHUB_SHA:-unknown}"
-            echo "Run ID: ${GITHUB_RUN_ID:-unknown}"
-            echo "Run number: ${GITHUB_RUN_NUMBER:-unknown}"
+            echo "--- WORKFLOW METRICS ---"
+            echo "Repo: $GITHUB_REPOSITORY"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Commit: $GITHUB_SHA"
+            echo "Run ID: $GITHUB_RUN_ID"
             echo
-            echo "OUTCOMES"
-            echo "dependencies: $DEPENDENCIES_OUTCOME"
-            echo "configure:    $CONFIGURE_OUTCOME"
-            echo "build:        $BUILD_OUTCOME"
-            echo
-            echo "========================================"
-            echo "SYSTEM"
-            echo "========================================"
+            echo "--- HARDWARE & OS ---"
             uname -a
-            echo
             nproc --all
-            echo
             free -h
-            echo
             df -h .
             echo
-            echo "========================================"
-            echo "TOOLCHAIN"
-            echo "========================================"
-            command -v clang || true
-            clang --version | head -n 5 || true
+            echo "--- COMPILER INFO ---"
+            clang --version | head -n 3 || true
             echo
-            echo "========================================"
-            echo "CONFIG FILES"
-            echo "========================================"
-            ls -lh arch/arm64/configs/vendor/fog_defconfig 2>&1 || true
-            ls -lh out/.config 2>&1 || true
-            echo
-            echo "========================================"
-            echo "LAST 220 BUILD LOG LINES"
-            echo "========================================"
-            tail -n 220 logs/build.log 2>/dev/null || echo "No build.log"
-            echo
-            echo "========================================"
-            echo "BOOT OUTPUT FILES"
-            echo "========================================"
-            find out/arch/arm64/boot -maxdepth 3 -type f -printf '%p | %s bytes\n' 2>/dev/null | sort || true
-          } > "$REPORT" 2>&1
+            echo "--- TAIL LOGS ---"
+            tail -n 200 build_logs/compilation.log 2>/dev/null || echo "No log available"
+          } > "$SUMMARY_FILE" 2>&1
 
-          echo "DEBUG_REPORT_PATH=$REPORT" >> "$GITHUB_ENV"
+          echo "DIAGNOSTIC_LOG=$SUMMARY_FILE" >> $GITHUB_ENV
 
-      - name: Upload debug report to GitHub
+      - name: Store Artifacts On GitHub
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build-debug-${{ github.run_number }}
+          name: build-logs-${{ github.run_number }}
           path: |
             debug_report.txt
-            logs/*.log
-            logs/*_error.txt
-          if-no-files-found: ignore
+            build_logs/*.log
           retention-days: 7
 
-      - name: Send result to Telegram
+      - name: Notify Telegram
         if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          BUILD_START: ${{ env.BUILD_START }}
+          BUILD_START: ${{ env.TIMESTAMP_START }}
           BUILD_STATUS: ${{ job.status }}
-          BUILD_FILE: ${{ env.BUILD_FILE }}
-          ANYKERNEL_ZIP: ${{ env.ANYKERNEL_ZIP }}
-          DEBUG_REPORT_PATH: ${{ env.DEBUG_REPORT_PATH }}
-        shell: bash
+          BUILD_FILE: ${{ env.IMAGE_OUTPUT }}
+          ANYKERNEL_ZIP: ${{ env.AK3_ZIP_PATH }}
+          DEBUG_REPORT_PATH: ${{ env.DIAGNOSTIC_LOG }}
         run: |
-          set -Eeuo pipefail
           python3 telegram_build.py
