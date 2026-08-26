@@ -76,8 +76,7 @@ try:
 except ValueError:
     die("TELEGRAM_CHANNEL_ID precisa ser um número inteiro.")
 
-if CHANNEL_ID >= 0:
-    die("TELEGRAM_CHANNEL_ID precisa ser negativo.")
+# Убрана принудительная проверка "if CHANNEL_ID >= 0", чтобы разрешить личные сообщения по положительному ID
 
 if ":" not in BOT_TOKEN:
     die("TELEGRAM_BOT_TOKEN tem formato inválido.")
@@ -391,7 +390,7 @@ def main():
     chat = telegram_form("getChat", {"chat_id": str(CHANNEL_ID)})
     log(
         f"Destino encontrado: "
-        f"{chat.get('title', chat.get('id'))} ({chat.get('id')})"
+        f"{chat.get('title', chat.get('first_name', chat.get('id')))} ({chat.get('id')})"
     )
 
     artifact = None
